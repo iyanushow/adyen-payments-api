@@ -19,9 +19,10 @@
   },
   "scripts": {
     "start": "dotenv -e .env react-scripts start",
-    "build": "dotenv -e .env react-scripts build",
+    "build-client": "dotenv -e .env react-scripts build",
     "test": "dotenv -e .env react-scripts test",
     "eject": "react-scripts eject",
+    "build": "npm run build && node server",
     "server": "npm run build && node server",
     "server-dev": "nodemon server"
   },
