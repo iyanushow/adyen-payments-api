@@ -12,8 +12,6 @@ app.use(morgan("dev"));
 app.use(express.json());
 // Parse URL-encoded bodies
 app.use(express.urlencoded({ extended: true }));
-// Serve client from build folder
-app.use(express.static(path.join(__dirname, "build")));
 
 // enables environment variables by
 // parsing the .env file and assigning it to process.env
@@ -24,6 +22,7 @@ dotenv.config({
 // Adyen Node.js API library boilerplate (configuration, etc.)
 const config = new Config();
 config.apiKey = process.env.ADYEN_API_KEY;
+config.merchantAccount = process.env.ADYEN_MERCHANT_ACCOUNT ?? "PrependECOM";
 const client = new Client({ config });
 client.setEnvironment("TEST");
 const checkout = new CheckoutAPI(client);
@@ -33,21 +32,18 @@ const validator = new hmacValidator();
 const paymentStore = {};
 
 const determineHostUrl = (req) => {
-  let {
-    "x-forwarded-proto": forwardedProto,
-    "x-forwarded-host": forwardedHost,
-  } = req.headers
+  let { "x-forwarded-proto": forwardedProto, "x-forwarded-host": forwardedHost } = req.headers;
 
   if (forwardedProto && forwardedHost) {
     if (forwardedProto.includes(",")) {
-      [forwardedProto,] = forwardedProto.split(",")
+      [forwardedProto] = forwardedProto.split(",");
     }
 
-    return `${forwardedProto}://${forwardedHost}`
+    return `${forwardedProto}://${forwardedHost}`;
   }
 
-  return "http://localhost:8080"
-}
+  return "http://localhost:8080";
+};
 
 /* ################# API ENDPOINTS ###################### */
 app.get("/api/getPaymentDataStore", async (req, res) => res.json(paymentStore));
@@ -59,7 +55,7 @@ app.post("/api/sessions", async (req, res) => {
     const orderRef = uuid();
 
     console.log("Received payment request for orderRef: " + orderRef);
-    
+
     // Ideally the data passed here should be computed based on business logic
     const response = await checkout.sessions({
       countryCode: "NL",
@@ -69,9 +65,9 @@ app.post("/api/sessions", async (req, res) => {
       returnUrl: `${determineHostUrl(req)}/redirect?orderRef=${orderRef}`, // required for 3ds2 redirect flow
       // set lineItems required for some payment methods (ie Klarna)
       lineItems: [
-        {quantity: 1, amountIncludingTax: 5000 , description: "Sunglasses"},
-        {quantity: 1, amountIncludingTax: 5000 , description: "Headphones"}
-      ] 
+        { quantity: 1, amountIncludingTax: 5000, description: "Sunglasses" },
+        { quantity: 1, amountIncludingTax: 5000, description: "Headphones" },
+      ],
     });
 
     // save transaction in memory
@@ -79,7 +75,7 @@ app.post("/api/sessions", async (req, res) => {
     paymentStore[orderRef] = {
       amount: { currency: "EUR", value: 1000 },
       paymentRef: orderRef,
-      status: "Pending"
+      status: "Pending",
     };
 
     res.json([response, orderRef]); // sending a tuple with orderRef as well to inform about the unique order reference
@@ -87,6 +83,32 @@ app.post("/api/sessions", async (req, res) => {
     console.error(`Error: ${err.message}, error code: ${err.errorCode}`);
     res.status(err.statusCode).json(err.message);
   }
+});
+
+app.post("/api/payments/details", async (req, res) => {
+  console.log("I got a payment details request");
+
+  checkout
+    .paymentsDetails(req.body)
+    .then((result) => res.json(result))
+    .catch((err) => console.log(err));
+});
+
+app.post("/api/paymentMethods", async (req, res) => {
+  console.log("I got a request");
+  console.log(req.body);
+  const { countryCode, amount, channel } = req.body;
+  checkout
+    .paymentMethods({
+      merchantAccount: config.merchantAccount,
+      countryCode,
+      amount,
+      channel,
+    })
+    .then((response) => {
+      res.json(response);
+    })
+    .catch((err) => console.log(err));
 });
 
 // Cancel or Refund a payment
@@ -113,17 +135,16 @@ app.post("/api/cancelOrRefundPayment", async (req, res) => {
 
 // Receive webhook notifications
 app.post("/api/webhooks/notifications", async (req, res) => {
-
   // get notificationItems from body
   const notificationRequestItems = req.body.notificationItems;
 
   // fetch first (and only) NotificationRequestItem
   const notificationRequestItem = notificationRequestItems[0].NotificationRequestItem;
   console.log(notificationRequestItem);
-  
+
   if (!validator.validateHMAC(notificationRequestItem, process.env.ADYEN_HMAC_KEY)) {
     // invalid hmac: webhook cannot be accepted
-    res.status(401).send('Invalid HMAC signature');
+    res.status(401).send("Invalid HMAC signature");
     return;
   }
 
@@ -132,14 +153,13 @@ app.post("/api/webhooks/notifications", async (req, res) => {
     // Process the webhook based on the eventCode
     if (notificationRequestItem.eventCode === "AUTHORISATION") {
       const payment = paymentStore[notificationRequestItem.merchantReference];
-      if(payment){
+      if (payment) {
         payment.status = "Authorised";
         payment.paymentRef = notificationRequestItem.pspReference;
       }
-    }
-    else if (notificationRequestItem.eventCode === "CANCEL_OR_REFUND") {
+    } else if (notificationRequestItem.eventCode === "CANCEL_OR_REFUND") {
       const payment = findPayment(notificationRequestItem.pspReference);
-      if(payment) {
+      if (payment) {
         console.log("Payment found: ", JSON.stringify(payment));
         // update with additionalData.modification.action
         if (
@@ -151,14 +171,12 @@ app.post("/api/webhooks/notifications", async (req, res) => {
           payment.status = "Cancelled";
         }
       }
-    } 
-    else {
+    } else {
       console.info("skipping non actionable webhook");
     }
   }
 
-  res.send('[accepted]');
-  
+  res.send("[accepted]");
 });
 
 /* ################# end API ENDPOINTS ###################### */
@@ -167,7 +185,7 @@ app.post("/api/webhooks/notifications", async (req, res) => {
 
 // Handles any requests that doesn't match the above
 app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "build", "index.html"));
+  res.send("Invalid Request");
 });
 
 /* ################# end CLIENT ENDPOINTS ###################### */
